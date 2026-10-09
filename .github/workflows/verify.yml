@@ -1,0 +1,85 @@
+name: verify
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'design/**'
+      - 'verify/**'
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: native
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: SDK versions
+        run: |
+          flutter --version
+          dart --version
+
+      - name: pub get
+        id: pubget
+        run: flutter pub get
+
+      - name: analyze
+        id: analyze
+        continue-on-error: true
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | tee analyze.txt
+
+      - name: test
+        id: test
+        continue-on-error: true
+        run: flutter test 2>&1 | tee test.txt
+
+      - name: summary
+        if: always()
+        run: |
+          analyze_errors=$(grep -c ' error • ' analyze.txt 2>/dev/null || true)
+          {
+            echo "## Verify results"
+            echo
+            echo "Flutter: $(flutter --version 2>&1 | head -1)"
+            echo
+            echo "| Step | Outcome |"
+            echo "|------|---------|"
+            echo "| pub get | ${{ steps.pubget.outcome }} |"
+            echo "| analyze | ${{ steps.analyze.outcome }} |"
+            echo "| test | ${{ steps.test.outcome }} |"
+            echo
+            echo "Analyze error lines: ${analyze_errors:-0}"
+            echo
+            echo "Last 40 lines of test output:"
+            echo '```'
+            tail -40 test.txt 2>/dev/null || echo "(test.txt not found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verify-logs
+          path: |
+            native/analyze.txt
+            native/test.txt
+          if-no-files-found: warn
+
+      - name: fail if any step did not succeed
+        if: always()
+        run: |
+          echo "pub get: ${{ steps.pubget.outcome }}"
+          echo "analyze: ${{ steps.analyze.outcome }}"
+          echo "test:    ${{ steps.test.outcome }}"
+          if [ "${{ steps.pubget.outcome }}" != "success" ] || [ "${{ steps.analyze.outcome }}" != "success" ] || [ "${{ steps.test.outcome }}" != "success" ]; then
+            exit 1
+          fi
